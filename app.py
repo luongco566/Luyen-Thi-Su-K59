@@ -1,142 +1,134 @@
 import streamlit as st
 import google.generativeai as genai
-import os
+import pandas as pd
+import plotly.express as px
+import datetime
 
-# --- CẤU HÌNH TRANG WEB ---
-st.set_page_config(
-    page_title="AI Luyện Thi Sử K59",
-    page_icon="🎓",
-    layout="wide"
-)
+# --- CẤU HÌNH TRANG (Chuẩn Flagship) ---
+st.set_page_config(page_title="Quản Lý Chi Tiêu AI", page_icon="💰", layout="wide")
 
-# --- CSS TÙY CHỈNH CHO ĐẸP ---
-st.markdown("""
-<style>
-    .stTextArea textarea {font-size: 16px !important;}
-    .stChatMessage {border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; margin-bottom: 10px;}
-</style>
-""", unsafe_allow_html=True)
-
-# --- SIDEBAR: CÀI ĐẶT ---
+# --- SIDEBAR: CẤU HÌNH ---
 with st.sidebar:
-    st.title("⚙️ Cấu hình phòng thi")
+    st.title("⚙️ Cấu hình ví tiền")
+    api_key = st.text_input("Nhập Google API Key", type="password")
+    st.info("💡 Mẹo: Nhập liệu tự nhiên, ví dụ: 'Cafe sáng 25k', AI sẽ tự lo phần còn lại.")
     
-    # Nhập API Key
-    api_key = st.text_input("Nhập Google API Key mới", type="password", help="Key cũ bị lộ rồi, hãy tạo key mới nhé!")
-    
-    st.divider()
-    
-    # Nạp tài liệu ôn thi
-    st.subheader("📚 Tài liệu ôn tập")
-    uploaded_file = st.file_uploader("Upload giáo trình (File TXT)", type=['txt'])
-    
-    context_text = ""
-    if uploaded_file is not None:
-        context_text = uploaded_file.read().decode("utf-8")
-        st.success(f"Đã nạp: {uploaded_file.name}")
-        with st.expander("Xem nội dung tài liệu"):
-            st.text(context_text[:500] + "...")
-    else:
-        st.info("Chưa có tài liệu. AI sẽ dùng kiến thức Lịch Sử phổ thông.")
+    # Nút reset dữ liệu
+    if st.button("🗑️ Xóa hết dữ liệu (Reset)"):
+        st.session_state.expenses = []
+        st.rerun()
 
-    st.divider()
-    difficulty = st.selectbox("Chọn độ khó:", ["Dễ (Ôn bài)", "Trung bình", "Khó (Thi thật)"])
+# --- KHỞI TẠO DỮ LIỆU (Session State) ---
+if "expenses" not in st.session_state:
+    st.session_state.expenses = []
 
-# --- HÀM XỬ LÝ AI (CÓ BẮT LỖI) ---
-def get_gemini_response(prompt_text):
+# --- HÀM AI XỬ LÝ (TRÁI TIM CỦA APP) ---
+def parse_expense_with_ai(text_input):
     if not api_key:
-        return "⚠️ Vui lòng nhập API Key ở cột bên trái để bắt đầu."
+        return None, None, "Thiếu API Key"
     
     try:
         genai.configure(api_key=api_key)
-        # Sử dụng model Flash (Nhanh và đọc được nhiều tài liệu)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt_text)
-        return response.text
+        model = genai.GenerativeModel('gemini-1.5-flash') # Dùng Flash cho nhanh
+        
+        # Prompt dạy AI cách hiểu tiếng Việt và tiền tệ
+        prompt = f"""
+        Nhiệm vụ: Phân tích câu nhập liệu chi tiêu thành dữ liệu có cấu trúc.
+        Input: "{text_input}"
+        
+        Yêu cầu Output: Chỉ trả về 1 dòng duy nhất theo định dạng: DANH_MỤC|SỐ_TIỀN_SỐ|GHI_CHÚ
+        - Danh mục chọn 1 trong: Ăn uống, Di chuyển, Mua sắm, Giải trí, Hóa đơn, Khác.
+        - Số tiền: Chuyển về số nguyên (VD: 30k -> 30000).
+        - Ghi chú: Giữ lại nội dung chính.
+        
+        Ví dụ: "Ăn phở 40k" -> Ăn uống|40000|Ăn phở
+        Ví dụ: "Đổ xăng 50 ngàn" -> Di chuyển|50000|Đổ xăng
+        """
+        response = model.generate_content(prompt)
+        content = response.text.strip()
+        
+        # Tách dữ liệu
+        category, amount, note = content.split('|')
+        return category, int(amount), note
     except Exception as e:
-        # Nếu lỗi 404, thử fallback về model cũ hơn
-        if "404" in str(e):
-            return "⚠️ Lỗi phiên bản: Bạn cần cập nhật file requirements.txt trên GitHub thành 'google-generativeai>=0.7.2' để dùng model mới nhất."
-        return f"Lỗi kết nối: {str(e)}"
+        return None, None, str(e)
+
+# --- HÀM TƯ VẤN TÀI CHÍNH ---
+def ask_financial_advisor():
+    if not st.session_state.expenses:
+        return "Bạn chưa tiêu gì cả, ví còn nguyên!"
+    
+    df = pd.DataFrame(st.session_state.expenses)
+    total = df['amount'].sum()
+    summary = df.groupby('category')['amount'].sum().to_string()
+    
+    prompt = f"""
+    Bạn là chuyên gia tài chính cá nhân gắt gao.
+    Tổng chi tiêu: {total} VNĐ.
+    Chi tiết:
+    {summary}
+    
+    Hãy nhận xét ngắn gọn về cách tiêu tiền này. Cảnh báo nếu tiêu quá nhiều vào trà sữa hay game.
+    """
+    model = genai.GenerativeModel('gemini-pro')
+    return model.generate_content(prompt).text
 
 # --- GIAO DIỆN CHÍNH ---
-st.title("🎓 Ứng Dụng Luyện Thi Sử K59")
-st.markdown("---")
+st.title("💰 Sổ Thu Chi Thông Minh (AI Powered)")
 
-tab1, tab2 = st.tabs(["📝 Luyện Tự Luận", "🗣️ Luyện Vấn Đáp"])
+# KHU VỰC 1: NHẬP LIỆU NHANH
+col1, col2 = st.columns([2, 1])
 
-# === TAB 1: TỰ LUẬN ===
-with tab1:
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("Đề bài")
-        user_question = st.text_input("Nhập câu hỏi hoặc chủ đề cần phân tích:", placeholder="Ví dụ: Phân tích ý nghĩa Hội nghị thành lập Đảng...")
-        st.subheader("Bài làm của bạn")
-        user_answer = st.text_area("Viết câu trả lời tại đây:", height=300, placeholder="Bắt đầu viết...")
+with col1:
+    st.subheader("📝 Nhập khoản chi mới")
+    with st.form("expense_form", clear_on_submit=True):
+        raw_text = st.text_input("Gõ tự nhiên (VD: Mua thẻ game 100k):")
+        submitted = st.form_submit_button("Lưu khoản chi")
         
-        btn_grade = st.button("🖊️ Chấm điểm ngay", type="primary")
+        if submitted and raw_text:
+            with st.spinner("AI đang phân tích..."):
+                cat, amt, note = parse_expense_with_ai(raw_text)
+                if cat:
+                    new_expense = {
+                        "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "category": cat,
+                        "amount": amt,
+                        "note": note
+                    }
+                    st.session_state.expenses.append(new_expense)
+                    st.success(f"✅ Đã thêm: {note} - {amt:,} đ ({cat})")
+                else:
+                    st.error("Lỗi AI hoặc nhập liệu chưa rõ. Hãy thử lại!")
 
-    with col2:
-        st.subheader("Kết quả chấm thi")
-        if btn_grade:
-            if not user_answer:
-                st.warning("Hãy viết bài làm trước khi chấm!")
-            else:
-                with st.spinner("Giáo sư đang đọc bài kỹ lưỡng..."):
-                    prompt = f"""
-                    Vai trò: Giảng viên Lịch sử trường ĐH Sư phạm (Độ khó: {difficulty}).
-                    Tài liệu tham khảo bắt buộc: {context_text}
-                    
-                    Yêu cầu chấm thi:
-                    1. Đánh giá bài làm sinh viên dựa trên câu hỏi: "{user_question}".
-                    2. Chấm điểm thang 10.
-                    3. Liệt kê các TỪ KHÓA (Keywords) lịch sử quan trọng mà sinh viên còn thiếu.
-                    4. Nhận xét ưu điểm/nhược điểm tư duy.
-                    5. Viết lại một đoạn văn mẫu chuẩn học thuật dựa trên ý của sinh viên.
-                    
-                    Bài làm của sinh viên:
-                    {user_answer}
-                    """
-                    result = get_gemini_response(prompt)
-                    st.markdown(result)
-
-# === TAB 2: VẤN ĐÁP ===
-with tab2:
-    st.subheader("Phòng thi Vấn đáp (Oral Exam)")
+# KHU VỰC 2: HIỂN THỊ DỮ LIỆU
+if st.session_state.expenses:
+    # Tạo DataFrame để xử lý dữ liệu
+    df = pd.DataFrame(st.session_state.expenses)
     
-    # Quản lý lịch sử chat
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "Chào em, mời em giới thiệu về chủ đề muốn thi vấn đáp hôm nay?"}
-        ]
+    st.divider()
+    
+    # Dashboard hoành tráng
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Tổng chi tiêu", f"{df['amount'].sum():,} đ")
+    m1.metric("Số giao dịch", len(df))
+    
+    # Biểu đồ tròn (Spectrogram tài chính :D)
+    with m2:
+        fig_pie = px.pie(df, values='amount', names='category', title='Cơ cấu chi tiêu', hole=0.4)
+        fig_pie.update_layout(height=300, margin=dict(t=30, b=0, l=0, r=0))
+        st.plotly_chart(fig_pie, use_container_width=True)
+        
+    # Lịch sử chi tiết
+    with m3:
+        st.dataframe(df[['date', 'category', 'amount', 'note']], hide_index=True, height=250)
 
-    # Hiển thị hội thoại cũ
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # KHU VỰC 3: AI TƯ VẤN
+    st.divider()
+    st.subheader("🕵️ Ý kiến chuyên gia (AI)")
+    if st.button("Phân tích ví tiền của tôi"):
+        with st.spinner("Đang soi ví..."):
+            advice = ask_financial_advisor()
+            st.info(advice)
 
-    # Ô nhập liệu chat
-    if prompt := st.chat_input("Nhập câu trả lời của bạn..."):
-        # Hiển thị câu user
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Xử lý AI trả lời
-        with st.chat_message("assistant"):
-            with st.spinner("Giáo sư đang suy nghĩ..."):
-                chat_prompt = f"""
-                Bạn là giáo sư Sử học đang thi vấn đáp sinh viên.
-                Tài liệu giáo trình: {context_text}
-                Lịch sử hội thoại: {st.session_state.messages}
-                Câu trả lời mới nhất của sinh viên: "{prompt}"
-                
-                Nhiệm vụ:
-                - Nếu sinh viên trả lời sai/thiếu: Hãy hỏi vặn lại (drill down) vào chi tiết đó.
-                - Nếu trả lời tốt: Khen ngợi ngắn gọn và chuyển sang câu hỏi khác liên quan logic.
-                - Giữ thái độ: {difficulty}.
-                """
-                response = get_gemini_response(chat_prompt)
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+else:
+    st.info("Chưa có dữ liệu. Hãy nhập khoản chi đầu tiên đi bạn tôi!")
