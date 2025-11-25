@@ -50,7 +50,7 @@ with st.sidebar:
     # Chọn Model (Hỗ trợ các đời mới nhất)
     model_option = st.selectbox(
         "Chọn Model:",
-        ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
+        ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.0-pro"]
     )
     
     st.info("💡 Cách nhập: 'Vừa đóng tiền mạng 250k', 'Ăn bún chả 40k'...")
@@ -168,3 +168,4 @@ if st.session_state.expenses:
 
 else:
     st.info("Hãy nhập khoản chi đầu tiên để test công nghệ mới!")
+
