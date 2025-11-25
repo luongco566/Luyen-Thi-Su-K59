@@ -4,37 +4,32 @@ from google.protobuf.json_format import MessageToDict
 import pandas as pd
 import plotly.express as px
 import datetime
+import os
 
-# --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Sổ Thu Chi (Function Calling)", page_icon="💳", layout="wide")
+# --- CẤU HÌNH TRANG (Giao diện rộng) ---
+st.set_page_config(page_title="Ultra Money Manager", page_icon="💎", layout="wide")
 
-# --- 1. ĐỊNH NGHĨA CÔNG CỤ (THE TOOL) ---
-# Đây là cái "khuôn" bạn dạy cho AI biết cách nhập liệu
+# --- CSS TÙY CHỈNH (Cho giống App xịn) ---
+st.markdown("""
+<style>
+    .metric-card {background-color: #f0f2f6; border-radius: 10px; padding: 15px; text-align: center;}
+    .stButton>button {width: 100%; border-radius: 20px;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- KHAI BÁO CÔNG CỤ (TOOL) ---
 expense_tool = {
     'function_declarations': [
         {
             'name': 'log_transaction',
-            'description': 'Ghi lại một khoản chi tiêu hoặc thu nhập của người dùng vào sổ cái.',
+            'description': 'Ghi lại giao dịch tài chính.',
             'parameters': {
                 'type': 'OBJECT',
                 'properties': {
-                    'category': {
-                        'type': 'STRING',
-                        'description': 'Danh mục chi tiêu (VD: Ăn uống, Di chuyển, Mua sắm, Hóa đơn, Giải trí, Khác)'
-                    },
-                    'amount': {
-                        'type': 'INTEGER',
-                        'description': 'Số tiền (VND). Nếu là 30k thì là 30000.'
-                    },
-                    'note': {
-                        'type': 'STRING',
-                        'description': 'Ghi chú chi tiết về khoản chi'
-                    },
-                    'type': {
-                        'type': 'STRING',
-                        'description': 'Loại giao dịch: "Chi" hoặc "Thu"',
-                        'enum': ['Chi', 'Thu']
-                    }
+                    'category': {'type': 'STRING', 'description': 'Danh mục (Ăn uống, Di chuyển, Mua sắm, Hóa đơn, Giải trí, Lương, Thưởng, Đầu tư, Khác)'},
+                    'amount': {'type': 'INTEGER', 'description': 'Số tiền VND (VD: 50k là 50000)'},
+                    'note': {'type': 'STRING', 'description': 'Nội dung chi tiết'},
+                    'type': {'type': 'STRING', 'enum': ['Chi', 'Thu'], 'description': 'Xác định là khoản Chi hay Thu'}
                 },
                 'required': ['category', 'amount', 'type']
             }
@@ -42,130 +37,140 @@ expense_tool = {
     ]
 }
 
-# --- SIDEBAR ---
+# --- QUẢN LÝ DỮ LIỆU (CSV) ---
+CSV_FILE = 'so_chi_tieu.csv'
+
+def load_data():
+    if os.path.exists(CSV_FILE):
+        return pd.read_csv(CSV_FILE)
+    return pd.DataFrame(columns=['date', 'category', 'amount', 'note', 'type'])
+
+def save_data(df):
+    df.to_csv(CSV_FILE, index=False)
+
+# --- SIDEBAR: CẤU HÌNH ---
 with st.sidebar:
-    st.title("⚙️ Cấu hình (Pro Mode)")
-    api_key = st.text_input("Nhập Google API Key", type="password")
+    st.header("🎛️ Trung tâm điều khiển")
+    api_key = st.text_input("🔑 Google API Key", type="password")
     
-    # Chọn Model (Hỗ trợ các đời mới nhất)
+    # List model theo yêu cầu của bác (Có cả bản 2.0 mới nhất)
     model_option = st.selectbox(
-        "Chọn Model:",
-        ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.0-pro"]
+        "🧠 Chọn Brain (Model):",
+        ["gemini-2.5-flash-exp", "gemini-2.5-pro", "gemini-2.5-pro", "gemini-2.0-pro"],
+        index=0
     )
     
-    st.info("💡 Cách nhập: 'Vừa đóng tiền mạng 250k', 'Ăn bún chả 40k'...")
+    st.divider()
+    st.subheader("💾 Quản lý dữ liệu")
     
-    if st.button("🗑️ Reset dữ liệu"):
-        st.session_state.expenses = []
-        st.rerun()
+    # Nút tải dữ liệu về máy (Backup)
+    if os.path.exists(CSV_FILE):
+        with open(CSV_FILE, "rb") as f:
+            st.download_button("⬇️ Tải file Backup (.csv)", f, file_name="backup_chitieu.csv", mime="text/csv")
+    
+    # Nút upload dữ liệu cũ (Restore)
+    uploaded_file = st.file_uploader("⬆️ Khôi phục dữ liệu cũ", type=['csv'])
+    if uploaded_file is not None:
+        try:
+            df_new = pd.read_csv(uploaded_file)
+            save_data(df_new)
+            st.success("Đã khôi phục dữ liệu!")
+            st.rerun()
+        except:
+            st.error("File lỗi rồi đại ca!")
 
-if "expenses" not in st.session_state:
-    st.session_state.expenses = []
-
-# --- HÀM XỬ LÝ FUNCTION CALLING (TRÁI TIM) ---
-def process_input_with_function_call(user_input):
-    if not api_key:
-        return False, "Chưa nhập API Key!"
-
+# --- XỬ LÝ AI ---
+def process_ai(text_input):
+    if not api_key: return False, "Chưa nhập Key!"
     try:
         genai.configure(api_key=api_key)
-        
-        # Khởi tạo model với TOOLS (Công cụ)
-        model = genai.GenerativeModel(
-            model_name=model_option,
-            tools=[expense_tool] # <--- Đưa "khuôn" cho AI cầm
-        )
-        
-        # Chat với AI, bật chế độ tự động gọi hàm
+        model = genai.GenerativeModel(model_name=model_option, tools=[expense_tool])
         chat = model.start_chat(enable_automatic_function_calling=True)
+        response = chat.send_message(text_input)
         
-        # Gửi tin nhắn. Vì enable_automatic_function_calling=True, 
-        # thư viện sẽ tự xử lý việc gọi hàm, nhưng ta cần bắt lấy dữ liệu.
-        # Tuy nhiên, để kiểm soát tốt hơn trên Streamlit, ta sẽ dùng cách gọi trực tiếp:
-        
-        response = model.generate_content(user_input)
-        
-        # Kiểm tra xem AI có "gọi hàm" không?
-        if hasattr(response, 'candidates') and response.candidates:
-            part = response.candidates[0].content.parts[0]
-            
-            # Nếu AI trả về Function Call (Đúng ý đồ)
+        # Bóc tách dữ liệu từ Function Call
+        for part in response.candidates[0].content.parts:
             if part.function_call:
-                # Chuyển đổi dữ liệu từ Protobuf sang Dict chuẩn Python
-                fc_args = part.function_call.args
-                data = dict(fc_args)
-                
-                # Trả về dữ liệu sạch đẹp
+                fc = part.function_call
                 return True, {
-                    "category": data.get("category", "Khác"),
-                    "amount": int(data.get("amount", 0)),
-                    "note": data.get("note", ""),
-                    "type": data.get("type", "Chi")
+                    "category": fc.args.get("category", "Khác"),
+                    "amount": int(fc.args.get("amount", 0)),
+                    "note": fc.args.get("note", ""),
+                    "type": fc.args.get("type", "Chi")
                 }
-            else:
-                # Nếu AI trả về text thường (Do nhập linh tinh không phải tiền nong)
-                return False, f"AI không hiểu đây là khoản chi. Nó bảo: {part.text}"
-        
-        return False, "Không nhận được phản hồi từ AI."
-
+        return False, "AI không nhận diện được giao dịch. Thử lại xem?"
     except Exception as e:
-        return False, f"Lỗi kỹ thuật: {str(e)}"
+        return False, f"Lỗi Model {model_option}: {str(e)}"
 
 # --- GIAO DIỆN CHÍNH ---
-st.title("💳 Ví AI (Công nghệ Function Calling)")
+st.title(f"💎 Quản Lý Tài Chính ({model_option})")
 
-# INPUT
-with st.form("input_form", clear_on_submit=True):
-    col_in1, col_in2 = st.columns([3, 1])
-    with col_in1:
-        text_input = st.text_input("Nhập giao dịch (VD: Lương về 10 củ, Mua trà sữa 50k)")
-    with col_in2:
-        submitted = st.form_submit_button("Ghi Sổ 🚀")
+# 1. LOAD DỮ LIỆU
+df = load_data()
 
-if submitted and text_input:
-    with st.spinner(f"Đang gọi hàm trên {model_option}..."):
-        success, result = process_input_with_function_call(text_input)
-        
-        if success:
-            # Thêm vào danh sách
-            st.session_state.expenses.append({
-                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                **result # Bung dữ liệu từ JSON ra
-            })
-            st.success(f"✅ Đã ghi: {result['note']} | {result['amount']:,} đ | {result['category']}")
-        else:
-            st.warning(result)
+# 2. KHU VỰC NHẬP LIỆU (Chat Style)
+with st.container():
+    col_input, col_btn = st.columns([4, 1])
+    with col_input:
+        user_text = st.text_input("", placeholder="💬 VD: Mới nhận lương 20 củ, tối đi nhậu hết 500k...", label_visibility="collapsed")
+    with col_btn:
+        btn_send = st.button("Gửi 🚀", type="primary")
 
-# HIỂN THỊ DỮ LIỆU
-if st.session_state.expenses:
-    df = pd.DataFrame(st.session_state.expenses)
+    if btn_send and user_text:
+        with st.spinner("AI đang phân tích..."):
+            success, result = process_ai(user_text)
+            if success:
+                new_row = {
+                    "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    **result
+                }
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(df) # Lưu ngay vào CSV
+                st.toast(f"✅ Đã lưu: {result['note']}", icon="🎉")
+                st.rerun()
+            else:
+                st.error(result)
+
+st.divider()
+
+# 3. DASHBOARD (HIỂN THỊ ĐẸP)
+if not df.empty:
+    # Tính toán chỉ số
+    tong_thu = df[df['type'] == 'Thu']['amount'].sum()
+    tong_chi = df[df['type'] == 'Chi']['amount'].sum()
+    so_du = tong_thu - tong_chi
     
-    st.divider()
+    # Hiển thị 3 số to đùng
+    c1, c2, c3 = st.columns(3)
+    c1.metric("💰 Tổng Thu", f"{tong_thu:,.0f} đ", delta="Thu nhập", delta_color="normal")
+    c2.metric("💸 Tổng Chi", f"{tong_chi:,.0f} đ", delta="-Chi tiêu", delta_color="inverse")
+    c3.metric("🏦 Số Dư", f"{so_du:,.0f} đ")
     
-    # Tính toán
-    total_chi = df[df['type'] == 'Chi']['amount'].sum()
-    total_thu = df[df['type'] == 'Thu']['amount'].sum()
-    balance = total_thu - total_chi
+    st.markdown("---")
     
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Tổng Thu", f"{total_thu:,} đ", delta_color="normal")
-    k2.metric("Tổng Chi", f"{total_chi:,} đ", delta_color="inverse")
-    k3.metric("Số Dư", f"{balance:,} đ")
+    # Hai cột biểu đồ
+    chart1, chart2 = st.columns(2)
     
-    # Biểu đồ & Bảng
-    c1, c2 = st.columns([1, 1])
-    
-    with c1:
-        if total_chi > 0:
+    with chart1:
+        st.subheader("📊 Cơ cấu chi tiêu")
+        if tong_chi > 0:
             df_chi = df[df['type'] == 'Chi']
-            fig = px.pie(df_chi, values='amount', names='category', title='Phân bổ chi tiêu', hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
+            fig_pie = px.pie(df_chi, values='amount', names='category', hole=0.5, color_discrete_sequence=px.colors.sequential.RdBu)
+            st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.info("Chưa tiêu đồng nào!")
-            
-    with c2:
-        st.dataframe(df, hide_index=True, use_container_width=True)
+            st.info("Chưa tiêu gì cả!")
+
+    with chart2:
+        st.subheader("📈 Xu hướng dòng tiền")
+        # Biểu đồ cột theo thời gian (Spectrogram tài chính :D)
+        if not df.empty:
+            fig_bar = px.bar(df, x='date', y='amount', color='type', barmode='group', 
+                             color_discrete_map={'Chi': '#ff4b4b', 'Thu': '#00cc96'})
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Bảng dữ liệu chi tiết
+    with st.expander("📜 Xem lịch sử giao dịch chi tiết", expanded=True):
+        st.dataframe(df.sort_index(ascending=False), use_container_width=True, hide_index=True)
 
 else:
-    st.info("Hãy nhập khoản chi đầu tiên để test công nghệ mới!")
-
+    st.info("👋 Chào bạn! Hãy nhập giao dịch đầu tiên để kích hoạt Dashboard.")
