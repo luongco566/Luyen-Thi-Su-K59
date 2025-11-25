@@ -1,137 +1,170 @@
 import streamlit as st
 import google.generativeai as genai
+from google.protobuf.json_format import MessageToDict
 import pandas as pd
 import plotly.express as px
 import datetime
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Quản Lý Chi Tiêu AI", page_icon="💰", layout="wide")
+st.set_page_config(page_title="Sổ Thu Chi (Function Calling)", page_icon="💳", layout="wide")
+
+# --- 1. ĐỊNH NGHĨA CÔNG CỤ (THE TOOL) ---
+# Đây là cái "khuôn" bạn dạy cho AI biết cách nhập liệu
+expense_tool = {
+    'function_declarations': [
+        {
+            'name': 'log_transaction',
+            'description': 'Ghi lại một khoản chi tiêu hoặc thu nhập của người dùng vào sổ cái.',
+            'parameters': {
+                'type': 'OBJECT',
+                'properties': {
+                    'category': {
+                        'type': 'STRING',
+                        'description': 'Danh mục chi tiêu (VD: Ăn uống, Di chuyển, Mua sắm, Hóa đơn, Giải trí, Khác)'
+                    },
+                    'amount': {
+                        'type': 'INTEGER',
+                        'description': 'Số tiền (VND). Nếu là 30k thì là 30000.'
+                    },
+                    'note': {
+                        'type': 'STRING',
+                        'description': 'Ghi chú chi tiết về khoản chi'
+                    },
+                    'type': {
+                        'type': 'STRING',
+                        'description': 'Loại giao dịch: "Chi" hoặc "Thu"',
+                        'enum': ['Chi', 'Thu']
+                    }
+                },
+                'required': ['category', 'amount', 'type']
+            }
+        }
+    ]
+}
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚙️ Cấu hình ví tiền")
+    st.title("⚙️ Cấu hình (Pro Mode)")
     api_key = st.text_input("Nhập Google API Key", type="password")
-    st.info("💡 Mẹo: Nhập 'Cafe 25k', 'Xăng 50k'...")
+    
+    # Chọn Model (Hỗ trợ các đời mới nhất)
+    model_option = st.selectbox(
+        "Chọn Model:",
+        ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
+    )
+    
+    st.info("💡 Cách nhập: 'Vừa đóng tiền mạng 250k', 'Ăn bún chả 40k'...")
     
     if st.button("🗑️ Reset dữ liệu"):
         st.session_state.expenses = []
         st.rerun()
 
-# --- KHỞI TẠO DỮ LIỆU ---
 if "expenses" not in st.session_state:
     st.session_state.expenses = []
 
-# --- HÀM TỰ ĐỘNG TÌM MODEL SỐNG (AUTO-SWITCH) ---
-def generate_with_fallback(prompt):
-    # Danh sách các tên model có thể dùng được
-    candidate_models = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-1.0-pro',
-        'gemini-pro',
-        'models/gemini-1.5-flash-latest'
-    ]
-    
-    last_error = ""
-    
-    for model_name in candidate_models:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text # Nếu chạy được thì trả về luôn
-        except Exception as e:
-            # Nếu lỗi thì thử cái tiếp theo
-            last_error = str(e)
-            continue
-            
-    # Nếu thử hết mà vẫn lỗi thì đầu hàng
-    raise Exception(f"Đã thử tất cả model nhưng đều thất bại. Lỗi cuối cùng: {last_error}")
-
-# --- HÀM XỬ LÝ CHÍNH ---
-def parse_expense_with_ai(text_input):
+# --- HÀM XỬ LÝ FUNCTION CALLING (TRÁI TIM) ---
+def process_input_with_function_call(user_input):
     if not api_key:
-        return None, None, "Chưa nhập API Key!"
-    
+        return False, "Chưa nhập API Key!"
+
     try:
         genai.configure(api_key=api_key)
         
-        prompt = f"""
-        Nhiệm vụ: Phân tích chi tiêu.
-        Input: "{text_input}"
-        Output format: DANH_MỤC|SỐ_TIỀN_SỐ|GHI_CHÚ
-        Danh mục: Ăn uống, Di chuyển, Mua sắm, Giải trí, Hóa đơn, Khác.
-        Số tiền: Số nguyên (VD: 30k -> 30000).
+        # Khởi tạo model với TOOLS (Công cụ)
+        model = genai.GenerativeModel(
+            model_name=model_option,
+            tools=[expense_tool] # <--- Đưa "khuôn" cho AI cầm
+        )
         
-        Ví dụ: "Ăn sáng 30k" -> Ăn uống|30000|Ăn sáng
-        """
+        # Chat với AI, bật chế độ tự động gọi hàm
+        chat = model.start_chat(enable_automatic_function_calling=True)
         
-        # Gọi hàm "vạn năng" ở trên
-        content = generate_with_fallback(prompt).strip()
+        # Gửi tin nhắn. Vì enable_automatic_function_calling=True, 
+        # thư viện sẽ tự xử lý việc gọi hàm, nhưng ta cần bắt lấy dữ liệu.
+        # Tuy nhiên, để kiểm soát tốt hơn trên Streamlit, ta sẽ dùng cách gọi trực tiếp:
         
-        if "|" not in content:
-             return None, None, f"AI trả về sai định dạng: {content}"
-
-        category, amount, note = content.split('|')
-        return category.strip(), int(amount), note.strip()
+        response = model.generate_content(user_input)
         
-    except Exception as e:
-        return None, None, str(e)
-
-# --- HÀM TƯ VẤN ---
-def ask_financial_advisor():
-    if not st.session_state.expenses:
-        return "Ví trống!"
-    
-    df = pd.DataFrame(st.session_state.expenses)
-    summary = df.groupby('category')['amount'].sum().to_string()
-    prompt = f"Bạn là chuyên gia tài chính. Tổng hợp chi tiêu: {summary}. Hãy nhận xét gắt gao."
-    
-    try:
-        genai.configure(api_key=api_key)
-        return generate_with_fallback(prompt)
-    except Exception as e:
-        return f"Lỗi tư vấn: {str(e)}"
-
-# --- GIAO DIỆN ---
-st.title("💰 Sổ Thu Chi (Bản Tự Động Fix Lỗi)")
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader("📝 Nhập chi tiêu")
-    with st.form("expense_form", clear_on_submit=True):
-        raw_text = st.text_input("Nhập khoản chi:")
-        submitted = st.form_submit_button("Lưu")
-        
-        if submitted and raw_text:
-            with st.spinner("AI đang tìm model phù hợp..."):
-                cat, amt, error_msg = parse_expense_with_ai(raw_text)
+        # Kiểm tra xem AI có "gọi hàm" không?
+        if hasattr(response, 'candidates') and response.candidates:
+            part = response.candidates[0].content.parts[0]
+            
+            # Nếu AI trả về Function Call (Đúng ý đồ)
+            if part.function_call:
+                # Chuyển đổi dữ liệu từ Protobuf sang Dict chuẩn Python
+                fc_args = part.function_call.args
+                data = dict(fc_args)
                 
-                if cat:
-                    st.session_state.expenses.append({
-                        "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "category": cat,
-                        "amount": amt,
-                        "note": error_msg
-                    })
-                    st.success(f"✅ Đã lưu: {error_msg} - {amt:,}đ")
-                    st.rerun()
-                else:
-                    st.error(f"❌ Lỗi: {error_msg}")
+                # Trả về dữ liệu sạch đẹp
+                return True, {
+                    "category": data.get("category", "Khác"),
+                    "amount": int(data.get("amount", 0)),
+                    "note": data.get("note", ""),
+                    "type": data.get("type", "Chi")
+                }
+            else:
+                # Nếu AI trả về text thường (Do nhập linh tinh không phải tiền nong)
+                return False, f"AI không hiểu đây là khoản chi. Nó bảo: {part.text}"
+        
+        return False, "Không nhận được phản hồi từ AI."
 
+    except Exception as e:
+        return False, f"Lỗi kỹ thuật: {str(e)}"
+
+# --- GIAO DIỆN CHÍNH ---
+st.title("💳 Ví AI (Công nghệ Function Calling)")
+
+# INPUT
+with st.form("input_form", clear_on_submit=True):
+    col_in1, col_in2 = st.columns([3, 1])
+    with col_in1:
+        text_input = st.text_input("Nhập giao dịch (VD: Lương về 10 củ, Mua trà sữa 50k)")
+    with col_in2:
+        submitted = st.form_submit_button("Ghi Sổ 🚀")
+
+if submitted and text_input:
+    with st.spinner(f"Đang gọi hàm trên {model_option}..."):
+        success, result = process_input_with_function_call(text_input)
+        
+        if success:
+            # Thêm vào danh sách
+            st.session_state.expenses.append({
+                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                **result # Bung dữ liệu từ JSON ra
+            })
+            st.success(f"✅ Đã ghi: {result['note']} | {result['amount']:,} đ | {result['category']}")
+        else:
+            st.warning(result)
+
+# HIỂN THỊ DỮ LIỆU
 if st.session_state.expenses:
     df = pd.DataFrame(st.session_state.expenses)
+    
     st.divider()
     
-    m1, m2 = st.columns(2)
-    with m1:
-        st.metric("Tổng chi", f"{df['amount'].sum():,} đ")
-        fig = px.pie(df, values='amount', names='category', hole=0.4)
-        fig.update_layout(height=300, margin=dict(t=0, b=0, l=0, r=0))
-        st.plotly_chart(fig, use_container_width=True)
-        
-    with m2:
-        st.dataframe(df[['date', 'category', 'amount', 'note']], hide_index=True, height=300)
+    # Tính toán
+    total_chi = df[df['type'] == 'Chi']['amount'].sum()
+    total_thu = df[df['type'] == 'Thu']['amount'].sum()
+    balance = total_thu - total_chi
+    
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Tổng Thu", f"{total_thu:,} đ", delta_color="normal")
+    k2.metric("Tổng Chi", f"{total_chi:,} đ", delta_color="inverse")
+    k3.metric("Số Dư", f"{balance:,} đ")
+    
+    # Biểu đồ & Bảng
+    c1, c2 = st.columns([1, 1])
+    
+    with c1:
+        if total_chi > 0:
+            df_chi = df[df['type'] == 'Chi']
+            fig = px.pie(df_chi, values='amount', names='category', title='Phân bổ chi tiêu', hole=0.4)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Chưa tiêu đồng nào!")
+            
+    with c2:
+        st.dataframe(df, hide_index=True, use_container_width=True)
 
-    if st.button("Phân tích ví"):
-        st.info(ask_financial_advisor())
+else:
+    st.info("Hãy nhập khoản chi đầu tiên để test công nghệ mới!")
