@@ -1,101 +1,142 @@
 import streamlit as st
 import google.generativeai as genai
+import os
 
-# --- CẤU HÌNH ---
-st.set_page_config(page_title="AI Sư Phạm Sử", layout="wide")
+# --- CẤU HÌNH TRANG WEB ---
+st.set_page_config(
+    page_title="AI Luyện Thi Sử K59",
+    page_icon="🎓",
+    layout="wide"
+)
 
-# --- SIDEBAR: NHẬP API KEY & TÀI LIỆU ---
+# --- CSS TÙY CHỈNH CHO ĐẸP ---
+st.markdown("""
+<style>
+    .stTextArea textarea {font-size: 16px !important;}
+    .stChatMessage {border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; margin-bottom: 10px;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- SIDEBAR: CÀI ĐẶT ---
 with st.sidebar:
-    st.title("Cấu hình phòng thi")
-    api_key = st.text_input("Nhập Google API Key", type="password")
+    st.title("⚙️ Cấu hình phòng thi")
     
-    # Khu vực nạp kiến thức (Context)
-    st.subheader("Nạp kiến thức (Giáo trình/Tài liệu)")
-    uploaded_file = st.file_uploader("Chọn file TXT", type=['txt'])
+    # Nhập API Key
+    api_key = st.text_input("Nhập Google API Key mới", type="password", help="Key cũ bị lộ rồi, hãy tạo key mới nhé!")
     
-    context = ""
+    st.divider()
+    
+    # Nạp tài liệu ôn thi
+    st.subheader("📚 Tài liệu ôn tập")
+    uploaded_file = st.file_uploader("Upload giáo trình (File TXT)", type=['txt'])
+    
+    context_text = ""
     if uploaded_file is not None:
-        context = uploaded_file.read().decode("utf-8")
-        st.success(f"Đã học xong tài liệu: {uploaded_file.name}")
+        context_text = uploaded_file.read().decode("utf-8")
+        st.success(f"Đã nạp: {uploaded_file.name}")
+        with st.expander("Xem nội dung tài liệu"):
+            st.text(context_text[:500] + "...")
     else:
-        st.info("Chưa có tài liệu. AI sẽ dùng kiến thức phổ thông.")
+        st.info("Chưa có tài liệu. AI sẽ dùng kiến thức Lịch Sử phổ thông.")
 
-# --- HÀM XỬ LÝ AI ---
-def ask_gemini(prompt):
+    st.divider()
+    difficulty = st.selectbox("Chọn độ khó:", ["Dễ (Ôn bài)", "Trung bình", "Khó (Thi thật)"])
+
+# --- HÀM XỬ LÝ AI (CÓ BẮT LỖI) ---
+def get_gemini_response(prompt_text):
     if not api_key:
-        return "⚠️ Hãy nhập API Key ở cột bên trái trước!"
+        return "⚠️ Vui lòng nhập API Key ở cột bên trái để bắt đầu."
+    
     try:
         genai.configure(api_key=api_key)
+        # Sử dụng model Flash (Nhanh và đọc được nhiều tài liệu)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
+        response = model.generate_content(prompt_text)
         return response.text
     except Exception as e:
+        # Nếu lỗi 404, thử fallback về model cũ hơn
+        if "404" in str(e):
+            return "⚠️ Lỗi phiên bản: Bạn cần cập nhật file requirements.txt trên GitHub thành 'google-generativeai>=0.7.2' để dùng model mới nhất."
         return f"Lỗi kết nối: {str(e)}"
 
 # --- GIAO DIỆN CHÍNH ---
-st.title("📝 Luyện Thi Vấn Đáp & Tự Luận - Sử K59")
+st.title("🎓 Ứng Dụng Luyện Thi Sử K59")
+st.markdown("---")
 
-tab1, tab2 = st.tabs(["Luyện Tự Luận (Essay)", "Luyện Vấn Đáp (Chat)"])
+tab1, tab2 = st.tabs(["📝 Luyện Tự Luận", "🗣️ Luyện Vấn Đáp"])
 
-# TAB 1: TỰ LUẬN
+# === TAB 1: TỰ LUẬN ===
 with tab1:
-    st.markdown("### Đề bài: Phân tích sự kiện/giai đoạn lịch sử")
-    question = st.text_input("Nhập câu hỏi ôn tập của bạn:")
-    student_answer = st.text_area("Bài làm của bạn:", height=250)
+    col1, col2 = st.columns([1, 1])
     
-    if st.button("Chấm điểm ngay"):
-        if not question or not student_answer:
-            st.warning("Vui lòng nhập đủ câu hỏi và câu trả lời.")
-        else:
-            with st.spinner("Giáo sư AI đang chấm bài..."):
-                # Prompt kỹ thuật cao: Yêu cầu AI chấm dựa trên Context đã upload
-                prompt_grading = f"""
-                Bạn là Giáo sư Lịch sử. Hãy chấm bài dựa trên tài liệu sau (nếu có):
-                ---
-                TÀI LIỆU GỐC: {context}
-                ---
-                Câu hỏi: {question}
-                Bài làm sinh viên: {student_answer}
-                
-                Yêu cầu output:
-                1. Điểm số (Thang 10).
-                2. Nhận xét chi tiết: Đúng ý nào, thiếu ý nào so với Tài liệu gốc.
-                3. Sửa lại bài văn cho hay hơn, văn phong học thuật.
-                """
-                result = ask_gemini(prompt_grading)
-                st.markdown(result)
-
-# TAB 2: VẤN ĐÁP
-with tab2:
-    st.markdown("### Phòng thi vấn đáp trực tiếp")
-    
-    if "history" not in st.session_state:
-        st.session_state.history = []
-
-    # Hiển thị chat
-    for msg in st.session_state.history:
-        role = "Bạn" if msg['role'] == 'user' else "Giáo sư"
-        st.chat_message(msg['role']).write(msg['content'])
-
-    # Nhập câu trả lời
-    user_input = st.chat_input("Trả lời hoặc hỏi lại giáo sư...")
-    
-    if user_input:
-        # Hiện câu của user
-        st.session_state.history.append({"role": "user", "content": user_input})
-        st.chat_message("user").write(user_input)
+    with col1:
+        st.subheader("Đề bài")
+        user_question = st.text_input("Nhập câu hỏi hoặc chủ đề cần phân tích:", placeholder="Ví dụ: Phân tích ý nghĩa Hội nghị thành lập Đảng...")
+        st.subheader("Bài làm của bạn")
+        user_answer = st.text_area("Viết câu trả lời tại đây:", height=300, placeholder="Bắt đầu viết...")
         
-        with st.spinner("..."):
-            # Prompt đóng vai
-            prompt_chat = f"""
-            Tài liệu gốc: {context}
-            Lịch sử chat: {st.session_state.history}
-            User vừa nói: {user_input}
-            
-            Hãy đóng vai giáo sư khó tính. Nếu sinh viên trả lời sai hoặc thiếu, hãy hỏi vặn lại (drill down). 
-            Nếu trả lời tốt, hãy chuyển sang chủ đề khác liên quan.
-            """
-            reply = ask_gemini(prompt_chat)
-            
-            st.session_state.history.append({"role": "assistant", "content": reply})
-            st.chat_message("assistant").write(reply)
+        btn_grade = st.button("🖊️ Chấm điểm ngay", type="primary")
+
+    with col2:
+        st.subheader("Kết quả chấm thi")
+        if btn_grade:
+            if not user_answer:
+                st.warning("Hãy viết bài làm trước khi chấm!")
+            else:
+                with st.spinner("Giáo sư đang đọc bài kỹ lưỡng..."):
+                    prompt = f"""
+                    Vai trò: Giảng viên Lịch sử trường ĐH Sư phạm (Độ khó: {difficulty}).
+                    Tài liệu tham khảo bắt buộc: {context_text}
+                    
+                    Yêu cầu chấm thi:
+                    1. Đánh giá bài làm sinh viên dựa trên câu hỏi: "{user_question}".
+                    2. Chấm điểm thang 10.
+                    3. Liệt kê các TỪ KHÓA (Keywords) lịch sử quan trọng mà sinh viên còn thiếu.
+                    4. Nhận xét ưu điểm/nhược điểm tư duy.
+                    5. Viết lại một đoạn văn mẫu chuẩn học thuật dựa trên ý của sinh viên.
+                    
+                    Bài làm của sinh viên:
+                    {user_answer}
+                    """
+                    result = get_gemini_response(prompt)
+                    st.markdown(result)
+
+# === TAB 2: VẤN ĐÁP ===
+with tab2:
+    st.subheader("Phòng thi Vấn đáp (Oral Exam)")
+    
+    # Quản lý lịch sử chat
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Chào em, mời em giới thiệu về chủ đề muốn thi vấn đáp hôm nay?"}
+        ]
+
+    # Hiển thị hội thoại cũ
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Ô nhập liệu chat
+    if prompt := st.chat_input("Nhập câu trả lời của bạn..."):
+        # Hiển thị câu user
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Xử lý AI trả lời
+        with st.chat_message("assistant"):
+            with st.spinner("Giáo sư đang suy nghĩ..."):
+                chat_prompt = f"""
+                Bạn là giáo sư Sử học đang thi vấn đáp sinh viên.
+                Tài liệu giáo trình: {context_text}
+                Lịch sử hội thoại: {st.session_state.messages}
+                Câu trả lời mới nhất của sinh viên: "{prompt}"
+                
+                Nhiệm vụ:
+                - Nếu sinh viên trả lời sai/thiếu: Hãy hỏi vặn lại (drill down) vào chi tiết đó.
+                - Nếu trả lời tốt: Khen ngợi ngắn gọn và chuyển sang câu hỏi khác liên quan logic.
+                - Giữ thái độ: {difficulty}.
+                """
+                response = get_gemini_response(chat_prompt)
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
